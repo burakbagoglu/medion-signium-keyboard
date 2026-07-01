@@ -8,12 +8,10 @@
 struct medion_kbd {
 	struct serio *serio;
 	struct input_dev *dev;
+	bool is_escaped;
+	bool left_alt_pressed;
+	bool right_alt_pressed;
 };
-
-// State flags for the PS/2 decoder
-static bool is_escaped = false;
-static bool left_alt_pressed = false;
-static bool right_alt_pressed = false;
 
 static unsigned short medion_kbd_translate_normal(unsigned char scancode) {
 	switch (scancode) {
@@ -115,12 +113,12 @@ static irqreturn_t medion_kbd_interrupt(struct serio *serio, unsigned char data,
 		return IRQ_HANDLED;
 
 	if (data == 0xe0) {
-		is_escaped = true;
+		kbd->is_escaped = true;
 		return IRQ_HANDLED;
 	}
 
-	bool escaped = is_escaped;
-	is_escaped = false;
+	bool escaped = kbd->is_escaped;
+	kbd->is_escaped = false;
 
 	unsigned short keycode = KEY_RESERVED;
 	bool down = true;
@@ -161,28 +159,28 @@ static irqreturn_t medion_kbd_interrupt(struct serio *serio, unsigned char data,
 		switch (data) {
 			// Left Alt & Right Alt State Tracking (since Right Alt is inverted and shares codes)
 			case 0x38:
-				if (right_alt_pressed) {
+				if (kbd->right_alt_pressed) {
 					// Right Alt Release (sends 0x38)
-					right_alt_pressed = false;
+					kbd->right_alt_pressed = false;
 					keycode = KEY_RIGHTALT;
 					down = false;
 				} else {
 					// Left Alt Press (sends 0x38)
-					left_alt_pressed = true;
+					kbd->left_alt_pressed = true;
 					keycode = KEY_LEFTALT;
 					down = true;
 				}
 				break;
 
 			case 0xb8:
-				if (left_alt_pressed) {
+				if (kbd->left_alt_pressed) {
 					// Left Alt Release (sends 0xb8)
-					left_alt_pressed = false;
+					kbd->left_alt_pressed = false;
 					keycode = KEY_LEFTALT;
 					down = false;
 				} else {
 					// Right Alt Press (sends 0xb8)
-					right_alt_pressed = true;
+					kbd->right_alt_pressed = true;
 					keycode = KEY_RIGHTALT;
 					down = true;
 				}
@@ -280,6 +278,16 @@ static const struct serio_device_id medion_kbd_serio_ids[] = {
 };
 MODULE_DEVICE_TABLE(serio, medion_kbd_serio_ids);
 
+static int medion_kbd_reconnect(struct serio *serio) {
+	struct medion_kbd *kbd = serio_get_drvdata(serio);
+	if (kbd) {
+		kbd->is_escaped = false;
+		kbd->left_alt_pressed = false;
+		kbd->right_alt_pressed = false;
+	}
+	return 0;
+}
+
 static struct serio_driver medion_kbd_driver = {
 	.driver		= {
 		.name	= "medion_kbd",
@@ -288,6 +296,8 @@ static struct serio_driver medion_kbd_driver = {
 	.id_table	= medion_kbd_serio_ids,
 	.interrupt	= medion_kbd_interrupt,
 	.connect	= medion_kbd_connect,
+	.reconnect	= medion_kbd_reconnect,
+	.fast_reconnect	= medion_kbd_reconnect,
 	.disconnect	= medion_kbd_disconnect,
 };
 
