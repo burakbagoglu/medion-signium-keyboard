@@ -1,71 +1,58 @@
-# Medion Signium 14 S1 OLED Linux Keyboard Driver
+# Medion Signium 14 S1 — dahili klavye ve Fn tuşları
 
-A custom Linux `serio` kernel driver module to fix the unresponsive internal keyboard on **Medion Signium 14 S1 OLED** laptops (and other models utilizing the `INTC816` or similar Intel HID framework) when running Linux distributions such as Fedora, Debian, or Ubuntu.
+Bu sürücü, bu bilgisayarda çalışan özel serio klavye çözümüne ses, medya, uyku ve touchpad tuşlarını ekler. Normal F1–F12 ile mevcut AltGr düzeltmesi korunur. MEDION 14 S1 OLED üzerinde Fn+F1'in `0x76` kodu gönderdiği fiziksel denemeyle ölçüldü; `medion_kbd.conf` bu kodu touchpad açma/kapatmaya eşler.
 
-## Observations and Issues
-On this laptop model, the internal keyboard is completely unresponsive under standard Linux kernels. During investigation, the following behavior was noted, although it is unclear whether it stems from a kernel limitation, a driver issue, or a hardware/firmware quirk:
-1. **Scancode Misinterpretation:** The keyboard outputs signals that standard Linux drivers (`atkbd`) misinterpret, leading to scrambled key layouts (for instance, pressing `A` registers as `2`).
-2. **Inverted Inputs:** The `Up`, `Down`, and `Right` arrow keys, along with `Right Alt` (AltGr), send keycodes that behave as if their press and release states are inverted.
-3. **Port Inactivity:** Under default ACPI initialization, the keyboard controller port (`serio0`) often becomes inactive or is disabled shortly after kernel load.
+## Derleme ve kod kontrolü
 
+Aşağıdaki komutları repo dizininde çalıştırın.
 
-## The Solution
-This driver (`medion_kbd.ko`) binds directly to the KBD serio port, intercepts the raw Set 1 scancodes, addresses the inverted states/custom modifiers, and reports correct keypresses to the input subsystem.
-
----
-
-## Installation Instructions
-
-### 1. Configure Kernel Boot Parameters
-To prevent the motherboard ACPI from disabling the keyboard port and to ensure we receive raw scancodes, you must add the following parameters to your GRUB configuration:
-```text
-i8042.nopnp=1 i8042.direct=1
-```
-On Fedora, you can set this permanently with:
-```bash
-sudo grubby --update-kernel=ALL --args="i8042.nopnp=1 i8042.direct=1" --remove-args="i8042.unlock=1"
-```
-
-### 2. Install Kernel Headers & Build
-Ensure you have the development tools and kernel headers installed for your running kernel:
-* **Fedora:** `sudo dnf install kernel-devel`
-* **Ubuntu/Debian:** `sudo apt install linux-headers-$(uname -r)`
-
-Clone this repository and compile the driver module:
 ```bash
 make
+python3 ./tests/test_scancodes.py
 ```
 
-### 3. Enroll the MOK Key (For Secure Boot)
-If UEFI Secure Boot is active on your laptop, you must sign the driver using a Machine Owner Key (MOK):
-1. Run the helper signing script:
-   ```bash
-   sudo ./sign_module.sh
-   ```
-2. The script will generate a MOK key pair, sign `medion_kbd.ko`, and ask you to enter a temporary password (e.g., `123456`) to register the MOK.
-3. **Reboot your system.**
-4. On startup, a blue screen titled **Shim UEFI Key Management** will appear.
-5. Select **Enroll MOK** -> **Continue** -> **Yes**, enter the password you set, and select **Reboot**.
+Test, sürücünün gerçek kod çözme fonksiyonlarını çalıştırır. Donanımın gönderdiği kodları ve KDE'nin tepkisini doğrulamak için ayrıca fiziksel tuş denemesi gerekir.
 
-### 4. Install & Automate
-After enrolling the key (or if Secure Boot is disabled), copy the module to the standard kernel modules directory, register it, and copy the loader scripts:
+## Kurulum
+
 ```bash
-# Copy module and update dependencies
-sudo mkdir -p /lib/modules/$(uname -r)/extra/
-sudo cp medion_kbd.ko /lib/modules/$(uname -r)/extra/
-sudo depmod -a
-
-# Install loader script
-sudo cp load_kbd_module.sh /usr/local/bin/load_kbd_module.sh
-sudo chmod +x /usr/local/bin/load_kbd_module.sh
-
-# Install and enable the boot service
-sudo cp medion_kbd.service /etc/systemd/system/medion_kbd.service
-sudo systemctl daemon-reload
-sudo systemctl enable medion_kbd.service
+sudo bash ./install.sh
 ```
 
-Upon your next boot, the custom driver will automatically load and translate your internal keyboard keys natively!
+Mevcut çekirdeğin başlıkları, DKMS ve LLVM derleme araçları gereklidir. Kurulum, çalışan modül ve betikleri `/var/lib/medion-signium-keyboard/backups/` altında yedekler. Eski 1.0 DKMS kaydı korunur. Yeni 1.1 modülü DKMS ile derlenir, yüklenir ve serio0 bağlantısı kontrol edilir. Modül yenilenirken klavye kısa süre yeniden bağlanır. Yükleme başarısız olursa eski sürücüye dönülür.
 
-## License
-GPL v2
+`--no-activate` seçeneği kurulumu yapıp yüklemeyi yeniden başlatmaya bırakır. Çalışan sistemin mevcut `i8042.nopnp=1 i8042.direct=1` önyükleme ayarları bu güncellemede değiştirilmez.
+
+## Fiziksel teşhis
+
+```bash
+sudo python3 ./watch_hotkeys.py --seconds 90
+```
+
+Bu araç klavyeyi kilitlemez. F tuşları, medya/uyku/touchpad olayları ve eşlenmemiş kodları gösterir; normal yazı girişini kaydetmez. Önce Fn+F4/F5/F6 ve Fn+F10/F11/F12, sonra Fn+F1 denenmelidir. Fn+F2 uyku denemesi en son yapılır; bilgisayarı güç düğmesine kısa basarak uyandırmak gerekebilir.
+
+F10/F12 için standart PS/2 önceki/sonraki parça kodları desteklenir. Oynatıcıların bu tuşlara verdiği tepki değişebilir. Zaman içinde geri/ileri sarma isteniyorsa önce tuşun gönderdiği kod ve istenen oynatıcı davranışı doğrulanmalıdır.
+
+Bu bilgisayarda ölçülen touchpad ayarı `/etc/modprobe.d/medion_kbd.conf` dosyasında `options medion_kbd touchpad_scancode=0x76` satırıdır. Kurulum, dosya henüz yoksa repodaki bu ayarı kurar; mevcut ayarı korur. Çalışan modüle yeniden yüklemeden uygulamak için:
+
+```bash
+sudo bash ./set_touchpad_code.sh 0x76
+```
+
+Başka bir modelde farklı kod ölçülürse `touchpad_scancode` değiştirilebilir; E0 öneki `0xe000` olarak kodlanır. Modülün kendi varsayılanı 0 olup eşleme kurulum ayarıyla etkinleşir.
+
+İsteğe bağlı `debug_unknown=1` parametresi eşlenmemiş kodları çekirdek günlüğüne yazar; normal kullanımda kapalıdır.
+
+## Geri dönüş
+
+```bash
+sudo bash ./rollback.sh
+```
+
+En son sistem yedeği seçilir. Belirli bir yedek dizini ilk argüman olarak verilebilir. Yedek, kullanılan çekirdeğe ait olmalıdır.
+
+Kurulumun sistem yedekleri `/var/lib/medion-signium-keyboard/backups/` altında tutulur.
+
+## Kaynak ve lisans
+
+Bu proje [mrelmida/medion-signium-keyboard](https://github.com/mrelmida/medion-signium-keyboard) projesinden türetilmiştir. Özgün Git geçmişi ve modül yazar bilgisi korunur. Lisans: GPL v2.

@@ -5,6 +5,15 @@
 #include <linux/input.h>
 #include <linux/slab.h>
 
+/* Optional model-specific touchpad make code, e.g. 0x76 or 0xe076. */
+static unsigned short touchpad_scancode;
+module_param(touchpad_scancode, ushort, 0644);
+MODULE_PARM_DESC(touchpad_scancode, "Touchpad toggle make code (0 disables override; E0 prefix encoded as 0xe000)");
+
+static bool debug_unknown;
+module_param(debug_unknown, bool, 0644);
+MODULE_PARM_DESC(debug_unknown, "Log unmapped scan codes for hotkey diagnosis");
+
 struct medion_kbd {
 	struct serio *serio;
 	struct input_dev *dev;
@@ -90,8 +99,16 @@ static unsigned short medion_kbd_translate_normal(unsigned char scancode) {
 
 static unsigned short medion_kbd_translate_escaped(unsigned char scancode) {
 	switch (scancode) {
+		/* Standard PS/2 set-1 multimedia and sleep make codes. */
+		case 0x10: return KEY_PREVIOUSSONG;
+		case 0x19: return KEY_NEXTSONG;
 		case 0x1c: return KEY_KPENTER;
 		case 0x1d: return KEY_RIGHTCTRL;
+		case 0x20: return KEY_MUTE;
+		case 0x22: return KEY_PLAYPAUSE;
+		case 0x24: return KEY_STOPCD;
+		case 0x2e: return KEY_VOLUMEDOWN;
+		case 0x30: return KEY_VOLUMEUP;
 		case 0x35: return KEY_KPSLASH;
 		case 0x37: return KEY_SYSRQ;
 		case 0x38: return KEY_RIGHTALT;
@@ -103,6 +120,7 @@ static unsigned short medion_kbd_translate_escaped(unsigned char scancode) {
 		case 0x5b: return KEY_LEFTMETA;
 		case 0x5c: return KEY_RIGHTMETA;
 		case 0x5d: return KEY_MENU;
+		case 0x5f: return KEY_SLEEP;
 		default: return KEY_RESERVED;
 	}
 }
@@ -121,6 +139,7 @@ static irqreturn_t medion_kbd_interrupt(struct serio *serio, unsigned char data,
 	kbd->is_escaped = false;
 
 	unsigned short keycode = KEY_RESERVED;
+	unsigned short scancode = (escaped ? 0xe000 : 0) | (data & 0x7f);
 	bool down = true;
 
 	if (escaped) {
@@ -193,10 +212,21 @@ static irqreturn_t medion_kbd_interrupt(struct serio *serio, unsigned char data,
 		}
 	}
 
+	if (touchpad_scancode && scancode == touchpad_scancode) {
+		keycode = KEY_TOUCHPAD_TOGGLE;
+		down = !(data & 0x80);
+	}
+
+	/* Also expose unmapped codes, so diagnosis does not require replacing
+	 * the working keyboard driver with atkbd or grabbing the device. */
+	input_event(kbd->dev, EV_MSC, MSC_SCAN, scancode);
 	if (keycode != KEY_RESERVED) {
 		input_report_key(kbd->dev, keycode, down);
-		input_sync(kbd->dev);
+	} else if (debug_unknown) {
+		pr_info_ratelimited("medion_kbd: unmapped scancode=0x%04x %s (byte=0x%02x)\n",
+				    scancode, down ? "press" : "release", data);
 	}
+	input_sync(kbd->dev);
 
 	return IRQ_HANDLED;
 }
@@ -204,7 +234,12 @@ static irqreturn_t medion_kbd_interrupt(struct serio *serio, unsigned char data,
 static int medion_kbd_connect(struct serio *serio, struct serio_driver *drv) {
 	struct medion_kbd *kbd;
 	struct input_dev *input_dev;
-	int err;
+	int err, i;
+	unsigned short keycode;
+	static const unsigned short extra_keys[] = {
+		KEY_LEFTALT, KEY_RIGHTALT, KEY_LEFT, KEY_RIGHT,
+		KEY_UP, KEY_DOWN, KEY_DELETE, KEY_TOUCHPAD_TOGGLE,
+	};
 
 	kbd = kzalloc(sizeof(struct medion_kbd), GFP_KERNEL);
 	input_dev = input_allocate_device();
@@ -226,12 +261,19 @@ static int medion_kbd_connect(struct serio *serio, struct serio_driver *drv) {
 	// Set input device capabilities
 	__set_bit(EV_KEY, input_dev->evbit);
 	__set_bit(EV_REP, input_dev->evbit);
+	input_set_capability(input_dev, EV_MSC, MSC_SCAN);
 
-	// Register all possible standard keys
-	int i;
-	for (i = 0; i < KEY_MAX; i++) {
-		__set_bit(i, input_dev->keybit);
+	/* Advertise the keys we can emit, without claiming mouse buttons. */
+	for (i = 0; i < 128; i++) {
+		keycode = medion_kbd_translate_normal(i);
+		if (keycode != KEY_RESERVED)
+			input_set_capability(input_dev, EV_KEY, keycode);
+		keycode = medion_kbd_translate_escaped(i);
+		if (keycode != KEY_RESERVED)
+			input_set_capability(input_dev, EV_KEY, keycode);
 	}
+	for (i = 0; i < ARRAY_SIZE(extra_keys); i++)
+		input_set_capability(input_dev, EV_KEY, extra_keys[i]);
 
 	serio_set_drvdata(serio, kbd);
 
@@ -313,5 +355,6 @@ module_init(medion_kbd_init);
 module_exit(medion_kbd_exit);
 
 MODULE_LICENSE("GPL");
+MODULE_VERSION("1.1");
 MODULE_AUTHOR("Antigravity");
 MODULE_DESCRIPTION("Medion Signium Custom Keyboard Driver");

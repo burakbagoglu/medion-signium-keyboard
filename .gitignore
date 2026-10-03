@@ -32,3 +32,8 @@ SSDT*.dsl
 SSDT*[0-9]
 medion_translate.py
 load_keymap.sh
+
+# Local backups and hardware diagnostic recordings
+/backups/
+hotkey-diagnostics.jsonl
+touchpad-confirmation.jsonl

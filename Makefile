@@ -1,13 +1,10 @@
 obj-m += medion_kbd.o
 
+KVERSION ?= $(shell uname -r)
+KDIR ?= /lib/modules/$(KVERSION)/build
+
 all:
-	rm -rf /tmp/intc816_driver
-	mkdir -p /tmp/intc816_driver
-	cp medion_kbd.c /tmp/intc816_driver/
-	echo "obj-m += medion_kbd.o" > /tmp/intc816_driver/Makefile
-	make -C /lib/modules/$(shell uname -r)/build M=/tmp/intc816_driver modules
-	cp /tmp/intc816_driver/medion_kbd.ko .
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" LLVM=1 modules
 
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=/tmp/intc816_driver clean
-	rm -rf /tmp/intc816_driver
+	$(MAKE) -C "$(KDIR)" M="$(CURDIR)" clean

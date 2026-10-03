@@ -1,6 +1,7 @@
 [Unit]
-Description=Medion Signium Keyboard Custom Serio Driver Loader
+Description=Medion Signium Keyboard Serio Driver Loader
 After=systemd-modules-load.service systemd-udevd.service
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
@@ -8,4 +9,4 @@ RemainAfterExit=yes
 ExecStart=/usr/local/bin/load_kbd_module.sh
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target
